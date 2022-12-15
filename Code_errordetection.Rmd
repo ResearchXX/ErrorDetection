@@ -1,0 +1,150 @@
+---
+title: "Proofreading_task"
+author: "Byurakn Ishkhanyan"
+date: "10/13/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Loading libraries
+```{r}
+library(lme4)
+library(tidyverse)
+library(ggplot2)
+library(effects)
+library(dplyr)
+```
+## Logit2prob function
+```{r}
+# let's make a logit2prob function that converts log odds to probabilities - we're going to need this for the glmer models
+logit2prob <- function(logit){
+  odds <- exp(logit)
+  prob <- odds / (1 + odds)
+  return(prob)
+}
+```
+
+```{r}
+# load the data
+data <- read_delim("high_school_data.csv", delim = ";") # if using '.' as decimals
+# data <- read_csv2("high_school_data.csv") # if using ',' as decimals
+
+# creating a column containing "expected responses", where 1 corresponds to "should be marked as an error" and 0 "shouldn't be marked as an error" 
+data$error = ifelse(data$Targetord == '0', 0, 1)
+
+# replacing NAs in the Targetfrase_markeret_num column with 0s to make the analysis easier
+data[which(is.na(data$Targetfrase_markeret_num)),]$Targetfrase_markeret_num <- 0
+
+# creating a column that has the target phrases marked
+data$marked = data$Targetfrase_markeret_num + data$`Ikke-target_markeret`
+
+# creating an accuracy column: participants score 1 if the error and Markeret_som_fejl are the same and 0 if they aren't
+data$accuracy = ifelse(data$marked == data$error, 1, 0)
+
+
+# let's give a nicer name to the words that don't contain any errors
+data$error_type = as.character(data$Fejltype)
+data[which(data$error_type == '0'),]$error_type <- 'no_error'
+
+# we need the error type as character to make some changes
+data$error_type = gsub("_.+", "", data$error_type)
+data$error_type = gsub("uden", "syntax", data$error_type)
+data$error_subtype1 = ifelse(startsWith(data$Fejltype, "VP"), data$Fejltype, data$Undertype)
+data$error_subtype2 = ifelse(startsWith(data$Fejltype, "NP"), data$Fejltype, data$Undertype)
+
+# now we need the error_type as factor for smoother analysis
+data$error_type = as.factor(data$error_type)
+
+data$Deltager = as.factor(data$Deltager)
+
+
+```
+## VERB THIRD ERRORS
+```{r}
+# subset to take only the v3 condition
+v3_length = subset(data, error_type == "syntax" & Targetord != 0)
+
+# FINAL model
+v3_length_m1 <- glmer(accuracy ~ Undertype + I(Total_grammar_score/10) + (1|Deltager) + (1|Targetfrase), family = "binomial", data = v3_length)
+summary(v3_length_m1)
+
+```
+## VERB ERRORS
+```{r}
+# subset to only take the verbs and only targets
+verbs = subset(data, (error_type == 'VP') & Targetord!='0')
+
+## FINAL model
+verbs_m_aug <- glmer(accuracy ~ error_subtype1 * error_subtype2 + Total_grammar_score + (1|Deltager) + (1|Targetord), family = "binomial", data = verbs)
+summary(verbs_m_aug)
+
+# Bar plot, verbs
+verbs_df = as.data.frame(verbs)
+verbs_df$Pred = logit2prob(predict(verbs_m_aug))
+p_vb <- ggplot(verbs_df, aes(x = error_subtype1, y = Pred, fill = error_subtype2))+ stat_summary(fun = mean, geom = "bar", position = position_dodge ())+ stat_summary(fun.data = mean_cl_boot, geom = "errorbar", position = position_dodge (width = 0.9), width = 0.2) + labs (x = "Error type", y = "Predicted probability of responding correctly") + scale_fill_brewer(palette="Blues") + theme_classic()
+p_vb
+
+
+```
+## NP ERRORS
+```{r}
+# noun phrases
+NP = subset(data, (error_type == 'NP' & Targetord!='0'))
+
+## FINAL MODEL: 
+np_m_aug <- glmer(accuracy ~ error_subtype1*error_subtype2  + Total_grammar_score + (1|Deltager) + (1|Targetord), family = "binomial", data = NP, glmerControl(optimizer = "Nelder_Mead"))
+summary(np_m_aug)
+
+# Bar plot
+NP_df = as.data.frame(NP)
+NP_df$Pred <- logit2prob(predict(np_m_aug))
+p_np <- ggplot(NP_df, aes(x = error_subtype1, y = Pred, fill = error_subtype2)) + stat_summary(fun = mean, geom = "bar", position = position_dodge ())+ stat_summary(fun.data = mean_cl_boot, geom = "errorbar", position = position_dodge (width = 0.9), width = 0.2)+ labs (x = "Error type", y = "Predicted probability of responding correctly") + scale_fill_brewer(palette="Blues") + theme_classic()
+p_np
+
+```
+## SPELLING ERRORS
+```{r}
+# orthography
+data = as.data.frame(data)
+
+orth = subset(data, error_type == "ortografi" & Targetord!='0')
+
+## FINAL MODEL
+orth_m3 <- glmer(accuracy ~ error_subtype1 + Stavning_korrekte + (1|Deltager) + (1|Targetord), family = "binomial", data = orth)
+summary(orth_m3)
+
+```
+## IRRITATION
+#Let's look at irritation score and accuracy relationship regardless of the error type. For this reason the data will first undergo certain transformations
+```{r}
+irrit_data <- data %>% group_by(Deltager, Targetfrase) %>%
+  summarise(accuracy = max(accuracy),
+            Irritation_sprogfejl = mean(Irritation_sprogfejl)) %>%
+  group_by(Deltager)%>%
+  summarise(acc_perc = sum(accuracy)/n()*100,
+            acc_se = sd(accuracy)/sqrt(n()),
+            irritation = mean(Irritation_sprogfejl))
+# let's model. using lm
+
+m1 <- lm(acc_perc ~ irritation, data = irrit_data)
+summary(m1)
+
+# nice! there is a small effect. Let's plot it then
+plot(m1)
+# looks like the tails are not as nice but let's leave it like this for now.
+
+irrit_plot <- ggplot(irrit_data, aes(x = irritation, y = acc_perc)) + geom_point(alpha = 0.2) + geom_smooth(method = "lm") +  theme_classic() + labs(x = "Irritation score", y = "Accuracy (%)")
+irrit_plot
+
+# Checking the plot
+res <- resid(m1)
+qqnorm(res)
+qqline(res)
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
