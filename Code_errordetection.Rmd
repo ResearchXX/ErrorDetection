@@ -68,7 +68,7 @@ data$Deltager = as.factor(data$Deltager)
 v3_length = subset(data, error_type == "syntax" & Targetord != 0)
 
 # FINAL model
-v3_length_m1 <- glmer(accuracy ~ Undertype + I(Total_grammar_score/10) + (1|Deltager) + (1|Targetfrase), family = "binomial", data = v3_length)
+v3_length_m1 <- glmer(accuracy ~ Undertype + Total_grammar_score + (1|Deltager) + (1|Targetfrase), family = "binomial", data = v3_length)
 summary(v3_length_m1)
 
 ```
